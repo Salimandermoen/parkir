@@ -1,0 +1,173 @@
+📍 LANGKAH 2: SETUP REPOSITORI DI VM 1 (GIT CLONE)
+A. Install Git di VM 1
+Bash
+sudo apt update && sudo apt install git -y
+B. Download Project Web dari GitHub ke VM 1
+Download repositori website ujian pemrogramanmu ke folder khusus bernama laravel-app:
+
+Bash
+git clone https://github.com/username-githubmu/nama-repo-kamu.git ~/laravel-app
+Pastikan di dalam folder ~/laravel-app tersebut sudah berisi source code web Laravel, file .env, Dockerfile, dan docker-compose.yml.
+
+📍 LANGKAH 3: ISI FILE DOCKER DI DALAM FOLDER PROJECT
+Pastikan isi file Dockerfile dan docker-compose.yml di dalam folder ~/laravel-app/ sudah sesuai dengan spesifikasi di bawah ini:
+
+A. File Dockerfile
+Dockerfile
+FROM php:8.1-fpm-alpine
+RUN docker-php-ext-install pdo pdo_mysql
+WORKDIR /var/www/html
+COPY . .
+CMD ["php", "-S", "0.0.0.0:80", "-t", "public"]
+B. File docker-compose.yml
+YAML
+version: '3.8'
+
+services:
+  web:
+    build: .
+    image: "budi_05_web_image" # Identitas Unik
+    ports:
+      - "8000-8001:80"        # Auto-scaling port dinamis
+    environment:
+      - DB_HOST=db_budi_05
+    depends_on:
+      - db
+
+  db:
+    image: mysql:8.0
+    container_name: "db_budi_05" # Identitas Unik
+    environment:
+      MYSQL_ROOT_PASSWORD: "password_05"
+      MYSQL_DATABASE: "db_laravel_budi"
+    ports:
+      - "3306:3306"
+
+  phpmyadmin:
+    image: phpmyadmin:latest
+    container_name: "pma_budi_05" # Identitas Unik
+    environment:
+      PMA_HOST: db_budi_05
+    ports:
+      - "8080:80"             # Diakses lewat http://192.168.56.20:8080
+    depends_on:
+      - db
+📍 LANGKAH 4: DEPLOYMENT MENGGUNAKAN ANSIBLE (DI VM 1)
+A. Install Ansible di VM 1
+Bash
+sudo apt install ansible -y
+B. Buat Folder Kerja & File Inventory
+Bash
+mkdir ~/devops_exam && cd ~/devops_exam
+nano hosts
+Isi file hosts dengan IP VM 2 target:
+
+Ini, TOML
+[vm2_target]
+192.168.56.20 ansible_user=user_vm2
+C. Buat Ansible Playbook
+Ketik nano playbook.yml. (⚠️ JANGAN pakai tombol TAB untuk spasi file YAML, gunakan spacebar biasa!).
+
+YAML
+---
+- name: Deploy Project Laravel & phpMyAdmin ke VM 2
+  hosts: vm2_target
+  become: true
+  vars:
+    prefix: "budi_05"
+
+  tasks:
+    - name: 1. Buat folder penampung website di VM 2
+      file:
+        path: "/var/www/{{ prefix }}_app"
+        state: directory
+        mode: '0755'
+
+    - name: 2. Kirim Source Code Laravel dari VM 1 ke VM 2
+      copy:
+        src: "~/laravel-app/"  # Folder hasil clone git di VM 1 tadi
+        dest: "/var/www/{{ prefix }}_app/" # Dikirim ke VM 2
+        mode: '0755'
+
+    - name: 3. Eksekusi Docker Compose (Build Image & Scale ke 2 Kontainer)
+      shell: |
+        cd /var/www/{{ prefix }}_app
+        docker compose up --build -d --scale web=2
+D. Jalankan Playbook
+Bash
+ansible-playbook -i hosts playbook.yml
+Pastikan hasilnya tidak ada yang berwarna merah (failed=0). Kontainer web di VM 2 sekarang sudah menyala otomatis.
+
+📍 LANGKAH 5: SET REVERSE PROXY & LOAD BALANCER HAPROXY (DI VM 1)
+Install HAProxy: sudo apt install haproxy -y
+
+Konfigurasi file: sudo nano /etc/haproxy/haproxy.cfg
+
+Scroll ke paling bawah file, tempel skrip pembagi beban trafik ini:
+
+Cuplikan kode
+frontend http_front_budi05
+    bind *:80
+    default_backend web_servers_budi05
+
+backend web_servers_budi05
+    balance roundrobin
+    server web_c1 192.168.56.20:8000 check
+    server web_c2 192.168.56.20:8001 check
+Aktifkan Service:
+
+Bash
+sudo systemctl restart haproxy
+sudo systemctl enable haproxy
+📍 LANGKAH 6: MEMBUAT BASH SCRIPT MONITORING (DI VM 1)
+Buat file script: nano ~/monitor_budi05.sh
+
+Isi skrip pengujian sistem ini:
+
+Bash
+#!/bin/bash
+IP_VM2="192.168.56.20"
+
+echo "========================================="
+echo "   STATUS MONITORING SYSTEM BY BUDI_05   "
+echo "========================================="
+
+# 1. Cek HAProxy
+if systemctl is-active --quiet haproxy; then
+    echo -e "HAProxy Load Balancer : ACTIVE"
+else
+    echo -e "HAProxy Load Balancer : DOWN / ERROR"
+fi
+
+# 2. Cek Ping VM 2
+if ping -c 1 $IP_VM2 > /dev/null; then
+    echo -e "Koneksi Jaringan VM 2 : CONNECTED"
+else
+    echo -e "Koneksi Jaringan VM 2 : UNREACHABLE"
+fi
+
+# 3. Cek Kontainer Web Laravel (Target harus 2)
+WEB_COUNT=$(ssh user_vm2@$IP_VM2 "docker ps | grep budi_05_web_image | grep -c 'Up'")
+echo -e "Kontainer Web Laravel : ($WEB_COUNT / 2 Kontainer)"
+
+# 4. Cek Kontainer phpMyAdmin
+PMA_STATUS=$(ssh user_vm2@$IP_VM2 "docker ps | grep pma_budi_05 | grep -c 'Up'")
+if [ "$PMA_STATUS" -eq 1 ]; then
+    echo -e "phpMyAdmin Status     : RUNNING (Port 8080)"
+else
+    echo -e "phpMyAdmin Status     : DOWN"
+fi
+echo "========================================="
+Beri Izin Eksekusi & Jalankan:
+
+Bash
+chmod +x ~/monitor_budi05.sh
+~/monitor_budi05.sh
+🏁 CARA DEMO HASIL AKHIR (DI DEPAN PENGUJI)
+Buka Browser: Ketik http://192.168.56.10 (IP VM 1). Web Laravel harus muncul dan jika di-refresh, beban akan dibagi bergantian ke port 8000 & 8001 VM 2.
+
+Cek phpMyAdmin: Ketik http://192.168.56.20:8080 di browser untuk mengelola database MySQL (Login user: root, password: password_05).
+
+Tampilkan Script: Jalankan ./monitor_budi05.sh di terminal VM 1 untuk memperlihatkan status All OK kepada penguji.
+
+Catatan ini siap tempur, wir! Sukses ujiannya!
