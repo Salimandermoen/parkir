@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    image: "budi_05_web_image" # Identitas Unik
+    ports:
+      - "8000-8001:80"        # Auto-scaling port dinamis
+    environment:
+      - DB_HOST=db_budi_05
+    depends_on:
+      - db
+
+  db:
+    image: mysql:8.0
+    container_name: "db_budi_05" # Identitas Unik
+    environment:
+      MYSQL_ROOT_PASSWORD: "password_05"
+      MYSQL_DATABASE: "db_laravel_budi"
+    ports:
+      - "3306:3306"
+
+  phpmyadmin:
+    image: phpmyadmin:latest
+    container_name: "pma_budi_05" # Identitas Unik
+    environment:
+      PMA_HOST: db_budi_05
+    ports:
+      - "8080:80"             # Diakses lewat http://192.168.56.20:8080
+    depends_on:
+      - db
